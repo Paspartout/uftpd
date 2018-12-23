@@ -1,3 +1,4 @@
+# CC = musl-gcc
 CFLAGS  := -Wall -Wextra -g -Og
 LDFLAGS := -flto
 

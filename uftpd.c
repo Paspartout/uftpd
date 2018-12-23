@@ -1,6 +1,5 @@
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <sys/queue.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -13,6 +12,10 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <dirent.h>
+#include <sys/stat.h>
+#include <time.h>
+
+#include "queue.h"
 
 #include "cmds.h"
 
@@ -40,13 +43,12 @@ typedef struct Client {
 	int socket;
 	int data_socket;
 
-	// TODO: Add dtp sockets etc
 	char username[USERNAME_SIZE];
 	char cwd[MAX_PATHLEN];
 	enum TranfserType type;
 
 	// Adress and port used for active or passive ftp?
-	bool addr_set;
+	bool passive_mode;
 	struct sockaddr_in addr;
 
 	// For linked list
@@ -97,10 +99,11 @@ int handle_connect(int listen_sock) {
 	} 
 
 	char client_ipstr[INET6_ADDRSTRLEN];
-	printf("new connection from %s on socket %d\n",
+	printf("new connection from %s:%d on socket %d\n",
 			inet_ntop(client_addr.ss_family, 
 				&((struct sockaddr_in*)&client_addr)->sin_addr,
 				client_ipstr, sizeof(client_ipstr)),
+				((struct sockaddr_in*)&client_addr)->sin_port,
 				newfd);
 
 	if (!list_initialized) {
@@ -117,11 +120,16 @@ int handle_connect(int listen_sock) {
 
 	// Insert client into list of connected clients and start by asking for username and password
 	new_client->socket = newfd;
-	/* new_client->state = Identifying; */
-	new_client->state = LoggedIn;
+	new_client->state = Identifying;
+	//new_client->state = LoggedIn;
 	new_client->data_socket = -1;
 	new_client->type = Ascii;
-	new_client->addr_set = false;
+	new_client->passive_mode = false;
+
+	// Use client address and default port 20 for active mode
+	memcpy(&(new_client->addr), &client_addr, sizeof(new_client->addr));
+	new_client->addr.sin_port = htons(20); // TODO: Port format correct?
+
 	SLIST_INSERT_HEAD(&client_list, new_client, entries);
 	
 	// TODO: Add version to welcome msg?
@@ -181,7 +189,7 @@ static int replyf(int sock, const char *format, ...) {
 
 // TODO: Move to another file?
 int cwd(Client *client, const char *path) {
-	static char pathbuf[MAX_PATHLEN];
+	static char pathbuf[2048];
 	const char* newpath;
 	const char* pwd = client->cwd;
 	DIR* dir = NULL;
@@ -213,16 +221,16 @@ int cwd(Client *client, const char *path) {
 		pathbuf[len] = '\0';
 		printf("pathbuf: %s, len: %d\n", pathbuf, len);
 		newpath = pathbuf;
-	} else if(path[0] == '.' && path[1] != '.') {
-		// Stay
-		newpath = pwd;
-		dir = opendir(pwd);
-	} else {
-		// Go to specified path
+	} else if (path[0] == '/') {
+		// Go to specified absoule path
 		newpath = path;
+	} else {
+		// Go to specified relative path
+		snprintf(pathbuf, sizeof(pathbuf), "%s/%s", client->cwd, path);
+		newpath = pathbuf;
 	}
 
-		dir = opendir(newpath);
+	dir = opendir(newpath);
 	if (dir == NULL) {
 		replyf(client->socket, "431 Error changing directory: %s\n", strerror(errno));
 		return -1;
@@ -233,9 +241,32 @@ int cwd(Client *client, const char *path) {
 	return 0;
 }
 
+// Open a active ftp connection by connecting to the clients address
+int open_active(Client *client) {
+	int data_socket = socket(AF_INET, SOCK_STREAM, 0);
+	// TODO: Consider using getaddrinfo
+	if (data_socket == -1) {
+		replyf(client->socket, "500 Connection error: %s\n", strerror(errno));
+		perror("socket");
+		return -1;
+	}
+	reply_client("150 File status okay; about to open data connection.\n"); // TODO: Figure out when to send this
+	int res = connect(data_socket, (struct sockaddr*)&(client->addr), sizeof(client->addr));
+	if (res == -1) {
+		replyf(client->socket, "500 Connection error: %s\n", strerror(errno));
+		perror("connect");
+		close(data_socket);
+		return -1;
+	}
+
+	return data_socket;
+}
+
+
 // Handle commands from user once logged in
 int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 	const int client_sock = client->socket;
+	int data_socket;
 	char type;
 	switch (cmd->keyword) {
 		case PWD: // Print working directory
@@ -257,8 +288,9 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 			const uint8_t ip1 = cmd->parameter.numbers[1];
 			const uint8_t ip2 = cmd->parameter.numbers[2];
 			const uint8_t ip3 = cmd->parameter.numbers[3];
-			const uint8_t port0 = cmd->parameter.numbers[4];
-			const uint8_t port1 = cmd->parameter.numbers[5];
+
+			const uint8_t port0 = cmd->parameter.numbers[4]; // high byte
+			const uint8_t port1 = cmd->parameter.numbers[5]; // low byte
 			printf("numbers: %d,%d,%d,%d-%d,%d\n",
 					cmd->parameter.numbers[0],
 					cmd->parameter.numbers[1],
@@ -268,13 +300,132 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 					cmd->parameter.numbers[5]
 					);
 			client->addr.sin_family = AF_INET;
-			// TODO: Figure out byte order
-			client->addr.sin_addr.s_addr = ip0 << 24 | ip1 << 16 | ip2 << 8 | ip3;
-			// client->addr.sin_addr.s_addr = ip3 << 24 | ip2 << 16 | ip1 << 8 | ip0;
-			client->addr.sin_port = port0 << 8 | port1;
+			// TODO: Probably don't do this and use inet_pton
+			client->addr.sin_addr.s_addr = ip3 << 24 | ip2 << 16 | ip1 << 8 | ip0;
+			client->addr.sin_port = port1 << 8 | port0;
+			reply_client("200 PORT was set.\n");
 			break;
-		case PASV:
+		//case PASV:
 			// TODO: Listen on new dataport and print addr of it
+			//break;
+		case RETR: {
+			// Do it
+			if (client->passive_mode) {
+				// TODO: Assign passive socket?
+				data_socket = 0;
+			} else {
+				if ((data_socket = open_active(client)) == -1) {
+					perror("open_active");
+					return -1;
+				}
+			}
+			char fullpath[2048]; // TODO: Figure out right size
+			snprintf(fullpath, sizeof(fullpath), "%s/%s", client->cwd, cmd->parameter.string);
+
+			printf("opening file %s\n", fullpath);
+			FILE *f = fopen(fullpath, "r");
+			if (f == NULL) {
+				// TODO: Indicate error to client
+				perror("fopen");
+				close(data_socket);
+				return -1;
+			}
+			char buf[2048]; // TODO: Use mtu?
+			size_t read_bytes = 0;
+			ssize_t sent_bytes = 0;
+			size_t reamining_bytes = 0;
+			printf("starting to send...\n");
+			do {
+				read_bytes = fread(buf, 1, 2048, f);
+				printf("read %ld bytes\n", read_bytes);
+				if (ferror(f)) {
+					perror("fread");
+				}
+				reamining_bytes = read_bytes;
+				printf("remaining %ld bytes\n", reamining_bytes);
+				while(reamining_bytes > 0) {
+					sent_bytes = send(data_socket, buf, read_bytes, 0);
+					printf("sent %ld bytes\n", sent_bytes);
+					if (sent_bytes == -1) {
+						perror("send");
+						close(data_socket);
+						return -1;
+					}
+					reamining_bytes -= sent_bytes;
+					printf("remaining %ld bytes\n", reamining_bytes);
+				}
+			} while(read_bytes > 0);
+			printf("done!\n");	
+
+			fclose(f);
+
+			reply_client("226 Closing data connection.\n");
+			close(data_socket);
+			reply_client("250 Requested file action okay, completed.\n");
+			} break;
+		case LIST: {
+			const char *pathname = client->cwd;
+			if (cmd->parameter.string[0] != 0) {
+				pathname = cmd->parameter.string;
+			}
+			printf("listing path: %s\n", pathname);
+
+			// connect to active user or listen for pasv
+			if (client->passive_mode) {
+				// TODO: Use listen socket? Enque listen command?
+			} else {
+				if ((data_socket = open_active(client)) == -1) {
+					return -1;
+				}
+
+				// List files
+				// Refactor into list(client, socket) or so
+				// TODO: Buffer first and the send once we know we got no error?
+				DIR *dir = opendir(pathname);
+				struct dirent* entry;
+				char fullpath[2048]; // TODO: Figure out right size
+				while((entry = readdir(dir)) != NULL) {
+					// TODO: Proper buffered sending
+					// TODO: Check strlens
+					if (entry->d_name[0] == '.') { // skip . file for now
+						continue;
+					}
+					struct stat entry_stat;
+					snprintf(fullpath, sizeof(fullpath), "%s/%s", client->cwd, entry->d_name);
+					if (stat(fullpath, &entry_stat) == -1) {
+						perror("stat");
+						continue;
+					}
+
+					// filetype: no link support(yet?)
+					char filetype;
+					if (entry->d_type ==DT_DIR)
+						filetype = 'd';
+					else
+						filetype = '-';
+
+					// Date format conforming to POSIX ls:
+					// https://pubs.opengroup.org/onlinepubs/9699919799/utilities/ls.html
+					char date_str[24];
+					const char *date_fmt = "%b %d %H:%M";
+					time_t mtime = entry_stat.st_mtim.tv_sec;
+					// Display year if file is older than 6 months
+					if (time(NULL) > entry_stat.st_mtim.tv_sec + 6*30*24*60*60)
+						date_fmt = "%b %d  %Y";
+					strftime(date_str, 24, date_fmt, localtime(&mtime));
+
+					const char *fmtstring = "%crw-rw-rw- 1 user group %lu %s %s\r\n";
+					printf(fmtstring, filetype, entry_stat.st_size, date_str, entry->d_name);
+					replyf(data_socket, fmtstring, filetype, entry_stat.st_size, date_str, entry->d_name);
+
+				}
+				closedir(dir);
+				
+				reply_client("226 Closing data connection.\n");
+				close(data_socket);
+				reply_client("250 Requested file action okay, completed.\n");
+			}
+			} break;
 		case TYPE: // Set the data representation type
 			type = cmd->parameter.code;
 			if (type == 'I') {
@@ -385,7 +536,7 @@ int main() {
 	sigaction(SIGINT, &act, NULL);
 
 	// only on local system not esp:
-	if (getaddrinfo(NULL, "1034", &hints, &res) == -1) {
+	if (getaddrinfo(NULL, "1033", &hints, &res) == -1) {
 		perror("getaddrinfo");
 		return -1;
 	}
