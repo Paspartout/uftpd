@@ -66,7 +66,7 @@ FtpCmd parse_ftpcmd(const char *YYCURSOR) {
 	cmd.keyword = INVALID;
 
 	const char *YYMARKER;
-	const char *p1, *p2, *p3, *p4, *p5;
+	const char *p1, *p2, *p3, *p4, *p5, *p6;
     /*!stags:re2c format = 'const char *@@;'; */
 	/*!re2c
 		re2c:define:YYCTYPE = char;
@@ -87,8 +87,8 @@ FtpCmd parse_ftpcmd(const char *YYCURSOR) {
 		structurecode = "F" | "R" | "P";
 		modecode = "S" | "B" | "C";
 
-		hostnumber = @p1 number "," @p2 number "," number @p3;
-		portnumber = @p4 number "," @p5 number;
+		hostnumber = @p1 number "," @p2 number "," @p3 number "," @p4 number;
+		portnumber = @p5 number "," @p6 number;
 		hostport = hostnumber "," portnumber;
 
 		* { goto done; }
@@ -105,7 +105,9 @@ FtpCmd parse_ftpcmd(const char *YYCURSOR) {
 			cmd.parameter.numbers[1] = strtoul(p2, NULL, 10);
 			cmd.parameter.numbers[2] = strtoul(p3, NULL, 10);
 			cmd.parameter.numbers[3] = strtoul(p4, NULL, 10);
+
 			cmd.parameter.numbers[4] = strtoul(p5, NULL, 10);
+			cmd.parameter.numbers[5] = strtoul(p6, NULL, 10);
 			goto done;
 		}
 		"PASV" end { CMD_NOPARAM(PASV) }
