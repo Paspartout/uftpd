@@ -5,12 +5,12 @@ LDFLAGS := -flto
 TARGET := uftpd
 
 %.c: %.re.c
-	re2c -T -o $@ $^
+	re2c -W -T -o $@ $^
 
 $(TARGET): uftpd.o cmdparser.o main.o
 
 clean:
-	rm -f *.o cmdparser
+	rm -f *.o uftpd
 
 .SECONDARY: $(TARGET).c
 .PHONY: clean

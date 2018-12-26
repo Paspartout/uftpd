@@ -65,15 +65,15 @@ FtpCmd parse_ftpcmd(const char *YYCURSOR) {
 	cmd.parameter.string[0] = 0; // 0 marks no string option given
 	cmd.keyword = INVALID;
 
+    /*!stags:re2c format = 'const char *@@;'; */
 	const char *YYMARKER;
 	const char *p1, *p2, *p3, *p4, *p5, *p6;
-    /*!stags:re2c format = 'const char *@@;'; */
 	/*!re2c
 		re2c:define:YYCTYPE = char;
 		re2c:yyfill:enable = 0;
 
 		end = "\x00" | "\n" | "\r\n"; // TODO: CRLF?
-		char = [^\r\n\x00];
+		char = [^ \t\r\n\x00];
 		string = char+;
 		digit = [0-9];
 		number
