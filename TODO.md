@@ -1,4 +1,3 @@
-- STOR
 - DELE
 - ASCII vs IMAGE
 

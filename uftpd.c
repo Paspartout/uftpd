@@ -325,7 +325,7 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 			printf("opening file %s\n", fullpath);
 			FILE *f = fopen(fullpath, "r");
 			if (f == NULL) {
-				// TODO: Indicate error to client
+				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
 				perror("fopen");
 				close(data_socket);
 				return -1;
@@ -362,6 +362,69 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 			reply_client("226 Closing data connection.\n");
 			close(data_socket);
 			reply_client("250 Requested file action okay, completed.\n");
+			} break;
+		case STOR: {
+			// TODO: Implement
+			char fullpath[2048]; // TODO: Figure out right size
+			snprintf(fullpath, sizeof(fullpath), "%s/%s", client->cwd, cmd->parameter.string);
+
+			// Try to create file by opening it for writing
+			// TODO: It overwrites files?
+			FILE *f = fopen(fullpath, "w");
+			if (f == NULL) {
+				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				perror("fopen");
+				return -1;
+			}
+
+			int data_socket;
+			if (client->passive_mode) {
+				// TODO: Assign passive socket?
+				data_socket = 0;
+			} else {
+				if ((data_socket = open_active(client)) == -1) {
+					perror("open_active");
+					fclose(f);
+					return -1;
+				}
+			}
+
+			// Read data from data_socket and write it to created file
+			char buf[2048]; // TODO: Use mtu?
+			size_t written_bytes = 0;
+			ssize_t received_bytes = 0;
+			ssize_t reamining_bytes = 0;
+			printf("starting to receive...\n");
+			do {
+				received_bytes = recv(data_socket, buf, sizeof(buf), 0);
+				if (received_bytes == -1) {
+					perror("recv");
+				}
+				// TODO: received_bytes == 0 -> connection closed?
+				printf("received %ld bytes\n", received_bytes);
+				reamining_bytes = received_bytes;
+				printf("remaining %ld bytes\n", reamining_bytes);
+				// Write the received bytes down
+				while(reamining_bytes > 0) {
+					written_bytes = fwrite(buf, 1, received_bytes, f);
+					printf("written %ld bytes\n", written_bytes);
+					if (ferror(f)) {
+						replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+						perror("fwrite");
+						fclose(f);
+						return -1;
+					}
+					reamining_bytes -= written_bytes;
+					printf("remainingloop %ld bytes\n", reamining_bytes);
+				}
+			} while(received_bytes > 0);
+			printf("done!\n");
+
+			reply_client("226 Closing data connection.\n");
+			close(data_socket);
+			reply_client("250 Requested file action okay, completed.\n");
+
+			fclose(f);
 			} break;
 		case LIST: {
 			const char *pathname = client->cwd;
@@ -442,7 +505,7 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 			reply(client_sock, "500 Invalid command.\n");
 			break;
 		default:
-			reply(client_sock, "500 Internal error. Command parsed but not implemented yet.\n");
+			reply(client_sock, "502 Command parsed but not implemented yet.\n");
 			return -1;
 			break;
 	}
