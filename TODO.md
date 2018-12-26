@@ -1,6 +1,3 @@
-- DELE
-- ASCII vs IMAGE
-
 - Cleanup
 	- Address all todos
 	- Remove all debug printfs
@@ -8,5 +5,6 @@
 
 - PASV
 - QUIT, ...
+- ASCII vs IMAGE
 
 - port to ODROID!!!!!

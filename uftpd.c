@@ -51,6 +51,9 @@ typedef struct Client {
 	bool passive_mode;
 	struct sockaddr_in addr;
 
+	// Used for moving/renaming files
+	char from_path[2048]; // TODO: Figure out lenght for paths
+
 	// For linked list
 	SLIST_ENTRY(Client) entries;
 } Client;
@@ -84,6 +87,7 @@ int close_all() {
 		if (close(c->socket) == -1) {
 			perror("close");
 		}
+		// TODO: client_free?
 		free(c);
 	}
 	return 0;
@@ -111,6 +115,7 @@ int handle_connect(int listen_sock) {
 		list_initialized = true;
 	}
 
+	// TODO: Client_create function
 	Client *new_client = malloc(sizeof(Client));
 	if (new_client == NULL) {
 		fprintf(stderr, "error mallocing client!\n");
@@ -121,10 +126,10 @@ int handle_connect(int listen_sock) {
 	// Insert client into list of connected clients and start by asking for username and password
 	new_client->socket = newfd;
 	new_client->state = Identifying;
-	//new_client->state = LoggedIn;
 	new_client->data_socket = -1;
 	new_client->type = Ascii;
 	new_client->passive_mode = false;
+	new_client->from_path[0] = 0;
 
 	// Use client address and default port 20 for active mode
 	memcpy(&(new_client->addr), &client_addr, sizeof(new_client->addr));
@@ -426,6 +431,57 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 
 			fclose(f);
 			} break;
+		case DELE: {
+			char fullpath[2048]; // TODO: Figure out right size
+			snprintf(fullpath, sizeof(fullpath), "%s/%s", client->cwd, cmd->parameter.string);
+			if (unlink(fullpath) == -1) {
+				perror("unlink");
+				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				return -1;
+			}
+			reply_client("250 Requested file action okay, completed.\n");
+			} break;
+		case RMD: {
+			char fullpath[2048]; // TODO: Figure out right size
+			snprintf(fullpath, sizeof(fullpath), "%s/%s", client->cwd, cmd->parameter.string);
+			if (rmdir(fullpath) == -1) {
+				perror("rmdir");
+				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				return -1;
+			}
+			reply_client("250 Requested file action okay, completed.\n");
+			} break;
+		case MKD: {
+			char fullpath[2048]; // TODO: Figure out right size
+			snprintf(fullpath, sizeof(fullpath), "%s/%s", client->cwd, cmd->parameter.string);
+			if (mkdir(fullpath, 0755) == -1) {
+				perror("mkdir");
+				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				return -1;
+			}
+			reply_client("250 Requested file action okay, completed.\n");
+			} break;
+		case RNFR: {
+			// TODO: stringlength error handling in general
+			snprintf(client->from_path, 2048, "%s/%s", client->cwd, cmd->parameter.string);
+			reply_client("350 Please specify destination using RNTO now.\n");
+			} break;
+		case RNTO: {
+			if (client->from_path[0] == 0) {
+				replyf(client->socket, "503 Bad sequence of commands. Use RNFR first.\n");
+				return -1;
+			}
+
+			if (rename(client->from_path, cmd->parameter.string) == -1) {
+				perror("rename");
+				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				client->from_path[0] = 0;
+				return -1;
+			}
+
+			client->from_path[0] = 0;
+			reply_client("250 Requested file action okay, completed.\n");
+			} break;
 		case LIST: {
 			const char *pathname = client->cwd;
 			if (cmd->parameter.string[0] != 0) {
@@ -598,7 +654,7 @@ int main() {
 	sigaction(SIGTERM, &act, NULL);
 	sigaction(SIGINT, &act, NULL);
 
-	// only on local system not esp:
+	// only on local system not esp:sd
 	if (getaddrinfo(NULL, "1033", &hints, &res) == -1) {
 		perror("getaddrinfo");
 		return -1;
