@@ -18,6 +18,7 @@
 
 #include "queue.h"
 #include "cmds.h"
+#include "uftpd.h"
 
 // Set PATH_MAX to 4096 for now
 // Actually paths can be much longer but I don't care about that use case for now.
@@ -639,79 +640,79 @@ int handle_recv(int client_sock, char* buf) {
 	return 0;
 }
 
-bool running = true;
-
-void handle_sig(int sig) {
-	printf("Handling signal %d\n", sig);
-	running = false;
-}
-
-int main() {
+int uftpd_init_localhost(uftpd_handle* handle, const char *port) {
 	struct addrinfo hints, *res;
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
 
-	// register signal handler for cleanup
-	struct sigaction act;
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = &handle_sig;
-	sigaction(SIGTERM, &act, NULL);
-	sigaction(SIGINT, &act, NULL);
-
-	// only on local system not esp:sd
-	if (getaddrinfo(NULL, "1034", &hints, &res) == -1) {
+	if (getaddrinfo(NULL, port, &hints, &res) == -1) {
 		perror("getaddrinfo");
 		return -1;
 	}
+	
+	return uftpd_init(handle, res);
+}
 
-	int listen_sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-	if (listen_sock == -1) {
+// Prepare to go into listen/event loop
+int uftpd_init(uftpd_handle* handle, struct addrinfo* addr) {
+	int listen_socket = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+	if (listen_socket == -1) {
 		perror("socket");
 		return -1;
 	}
 
-	if (bind(listen_sock, res->ai_addr, sizeof(struct sockaddr)) == -1) {
+	if (bind(listen_socket, addr->ai_addr, sizeof(struct sockaddr)) == -1) {
 		perror("bind");
 		return -1;
 	}
 
-	if (listen(listen_sock, 10) == -1) {
+	if (listen(listen_socket, 10) == -1) {
 		perror("listen");
 		return -1;
 	}
+	
+	FD_ZERO(&handle->master);
 
-	fd_set master, ready;
-	FD_ZERO(&master);
-	FD_ZERO(&ready);
-	FD_SET(listen_sock, &master);
+	FD_SET(listen_socket, &handle->master);
+	handle->fd_max = listen_socket;
+	handle->listen_socket = listen_socket;
 
-	int fdmax = listen_sock;
+	return 0;
+}
+
+// Event loop of server
+int uftpd_loop(uftpd_handle* handle) {
+	bool running = true;
 	int nbytes;
+	fd_set ready;
+	char buf[128];
+
+	FD_ZERO(&ready);
 
 	while(running) {
-		ready = master;
-		if (select(fdmax+1, &ready, NULL, NULL, NULL) == -1) {
+		ready = handle->master;
+		if (select(handle->fd_max+1, &ready, NULL, NULL, NULL) == -1) {
 			perror("select");
 			break;
 		}
-		// One got ready
-		char buf[128];
+		int fdmax = handle->fd_max;
+
 		for (int i = 0; i <= fdmax; i++) {
 			if (!FD_ISSET(i, &ready)) {
 				continue;
 			}
 
-			if (i == listen_sock) {
+			if (i == handle->listen_socket) {
 				int csock;
-				if ((csock = handle_connect(listen_sock)) == -1) {
+				if ((csock = handle_connect(handle->listen_socket)) == -1) {
 					fprintf(stderr, "error handling incomming connection");
 					running = false;
 				}
 
 				// Add new socket to master list
-				FD_SET(csock, &master); 
+				FD_SET(csock, &handle->master); 
 				if (csock > fdmax) {
 					fdmax = csock;
 				}
@@ -724,7 +725,7 @@ int main() {
 						perror("recv");
 					}
 					close(i);
-					FD_CLR(i, &master);
+					FD_CLR(i, &handle->master);
 					continue; // skip to next socket
 				}
 
@@ -733,14 +734,13 @@ int main() {
 				buf[nbytes] = '\0';
 				handle_recv(i, buf);
 			} // i == listen_sock
-		}
-	}
+			handle->fd_max = fdmax;
+		} // for all sockets
+	} // while(running)
 
 	// close remaining connections
 	close_all();
-	close(listen_sock);
-
+	close(handle->listen_socket);
 	return 0;
 }
-
 
