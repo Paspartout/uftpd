@@ -156,6 +156,7 @@ Client *client_new(int socket, struct sockaddr_storage *client_addr) {
 int handle_connect(int listen_sock) {
 	struct sockaddr_storage client_addr;
 	socklen_t addrlen = sizeof(client_addr);
+
 	int newfd = accept(listen_sock, (struct sockaddr*)&client_addr, &addrlen);
 	if (newfd == -1) {
 		perror("accept");
@@ -582,6 +583,7 @@ int handle_recv(int client_sock, char* buf) {
 	assert(client != NULL);
 	const bool is_data_socket = client_sock == client->data_socket ? true : false;
 
+	// TODO: PASSV: Handle DTP socket?
 	if (is_data_socket) {
 		if (handle_data(buf, client) != 0) {
 			fprintf(stderr, "error handling ftp data socket");
@@ -590,7 +592,6 @@ int handle_recv(int client_sock, char* buf) {
 		return 0;
 	}
 
-	// TODO: PASSV: Handle DTP socket?
 	FtpCmd cmd = parse_ftpcmd(buf);
 	dprintf("command buffer: \"%s\"", buf);
 	dprintf("parsed command: %s\n", keyword_names[cmd.keyword]);
@@ -637,8 +638,6 @@ int handle_recv(int client_sock, char* buf) {
 
 	return 0;
 }
-
-#undef reply
 
 bool running = true;
 

@@ -53,7 +53,7 @@ typedef struct FtpCmd {
 	// Parameters
 	union {
 		char string[MAX_STRSIZE]; // for pathname, username, ...
-		uint8_t numbers[5]; // host-number followed by port-number
+		uint8_t numbers[6]; // host-number followed by port-number
 		char code; // type/mode/structure code
 	} parameter;
 } FtpCmd;

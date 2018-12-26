@@ -1,6 +1,4 @@
 - Cleanup
-	- Address all todos
-	- Remove all debug printfs
 	- static all the things?
 - Make it a library somehow
 
@@ -15,4 +13,4 @@
 
 - Larger buffers for file transfers
 - Replace snprintfs, vsnprintfs with custom functions
-
+- Address all todos
