@@ -162,7 +162,7 @@ static int disconnect_all_clients() {
 }
 
 // Create a new client and initalize it
-static Client *client_new(int socket, struct sockaddr_storage *client_addr) {
+static Client *client_new(int socket, struct sockaddr_storage *client_addr, const char *start_dir) {
 	Client *new_client = malloc(sizeof(Client));
 	if (new_client == NULL) {
 		fprintf(stderr, "error mallocing client!\n");
@@ -175,6 +175,7 @@ static Client *client_new(int socket, struct sockaddr_storage *client_addr) {
 	new_client->ttype = Image;
 	new_client->passive_mode = false;
 	new_client->from_path[0] = 0;
+	strncpy(new_client->cwd, start_dir, strlen(start_dir));
 
 	// Use client address and default port 20 for active mode
 	new_client->addr.sin_port = htons(20);
@@ -185,7 +186,7 @@ static Client *client_new(int socket, struct sockaddr_storage *client_addr) {
 
 // Handle a new incomming connection on listen_sock by
 // creating a new client and welcome it to the server.
-static int handle_connect(int listen_sock, uftpd_callback ev_callback) {
+static int handle_connect(int listen_sock, uftpd_ctx *ctx) {
 	struct sockaddr_storage client_addr;
 	socklen_t addrlen = sizeof(client_addr);
 
@@ -201,7 +202,7 @@ static int handle_connect(int listen_sock, uftpd_callback ev_callback) {
 	}
 
 	// Insert client into list of connected clients
-	Client *client = client_new(newfd, &client_addr);
+	Client *client = client_new(newfd, &client_addr, ctx->start_dir);
 	if (client == NULL) {
 		return -1;
 	}
@@ -212,7 +213,7 @@ static int handle_connect(int listen_sock, uftpd_callback ev_callback) {
 	char client_ipstr[INET6_ADDRSTRLEN];
 	inet_ntop(client_addr.ss_family, &((struct sockaddr_in *)&client_addr)->sin_addr, client_ipstr,
 	          sizeof(client_ipstr));
-	notify_user(ClientConnected, client_ipstr);
+	notify_user_ctx(ClientConnected, client_ipstr);
 
 	return newfd;
 }
@@ -645,8 +646,6 @@ static int handle_ftpcmd(FtpCmd *cmd, Client *client, uftpd_callback ev_callback
 			if (logged_in) {
 				rreply_client("230 Login successful.\n");
 				client->state = LoggedIn;
-				strncpy(client->cwd, "/",
-				        STRLEN("/")); // TODO: Make starting cwd configurable?
 			} else {
 				rreply_client("530 Wrong password.\n");
 				client->state = Identifying;
@@ -734,6 +733,7 @@ int uftpd_init(uftpd_ctx *ctx, struct addrinfo *addr) {
 	ctx->listen_socket = listen_socket;
 	ctx->running = true;
 	ctx->ev_callback = NULL;
+	ctx->start_dir = "/";
 
 	return 0;
 }
@@ -762,7 +762,7 @@ int uftpd_start(uftpd_ctx *ctx) {
 
 			if (sock == ctx->listen_socket) {
 				int csock;
-				if ((csock = handle_connect(ctx->listen_socket, ctx->ev_callback)) == -1) {
+				if ((csock = handle_connect(ctx->listen_socket, ctx)) == -1) {
 					fprintf(stderr, "error handling incomming connection");
 					ctx->running = false;
 				}
@@ -807,3 +807,5 @@ int uftpd_start(uftpd_ctx *ctx) {
 void uftpd_stop(uftpd_ctx *ctx) { ctx->running = false; }
 
 void uftpd_set_ev_callback(uftpd_ctx *ctx, uftpd_callback callback) { ctx->ev_callback = callback; }
+
+void uftpd_set_start_dir(uftpd_ctx *ctx, const char *start_dir) { ctx->start_dir = start_dir; }

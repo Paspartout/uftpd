@@ -26,6 +26,8 @@ typedef struct uftpd_ctx {
 	fd_set master;
 	int fd_max;
 	bool running;
+
+	const char *start_dir;
 	uftpd_callback ev_callback;
 } uftpd_ctx;
 
@@ -43,6 +45,11 @@ void uftpd_stop(uftpd_ctx *ctx);
 
 /// Set a callback function that gets called when an event happens.
 void uftpd_set_ev_callback(uftpd_ctx *ctx, uftpd_callback callback);
+
+/// Set the starting directory that is the clients first working directory.
+/// NOTE: start_dir has to valid as long as the server lives.
+/// No copy will be made.
+void uftpd_set_start_dir(uftpd_ctx *ctx, const char *start_dir);
 
 #define UFTPD_H
 #endif

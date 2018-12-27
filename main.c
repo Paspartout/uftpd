@@ -24,7 +24,12 @@ static void callback(uftpd_event ev, const char *details) {
 	}
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+	if (argc != 2) {
+		fprintf(stderr, "usage: %s PORT\n", argv[0]);
+		return -1;
+	}
+
 	// register signal handler for cleanup
 	struct sigaction act;
 	memset(&act, 0, sizeof(act));
@@ -32,9 +37,12 @@ int main() {
 	sigaction(SIGTERM, &act, NULL);
 	sigaction(SIGINT, &act, NULL);
 
-	uftpd_init_localhost(&ctx, "1033");
+	if (uftpd_init_localhost(&ctx, argv[1]) != 0)
+		return -1;
 	uftpd_set_ev_callback(&ctx, callback);
-	uftpd_start(&ctx);
+	uftpd_set_start_dir(&ctx, "/home");
+	if (uftpd_start(&ctx) != 0)
+		return -1;
 
 	return 0;
 }
