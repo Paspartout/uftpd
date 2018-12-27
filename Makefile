@@ -4,7 +4,7 @@ LDFLAGS := -flto
 
 TARGET := uftpd
 
-%.c: %.re.c
+%.c: %.re
 	re2c -W -T -o $@ $^
 
 $(TARGET): uftpd.o cmdparser.o main.o

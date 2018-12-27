@@ -1,5 +1,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -9,10 +10,8 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <signal.h>
 #include <stdarg.h>
 #include <dirent.h>
-#include <sys/stat.h>
 #include <time.h>
 #include <limits.h>
 
@@ -46,8 +45,7 @@
 #define rreply(sock, s) if (send(sock, s, STRLEN(s), 0) == -1) \
 					return -1; \
 
-#define rreply_client(s) if (send(client->socket, s, STRLEN(s), 0) == -1) \
-					return -1; \
+#define rreply_client(s) rreply(client->socket, s)
 
 static int replyf(int sock, const char *format, ...) {
 	#define REPLYBUFLEN 255
@@ -65,7 +63,7 @@ static int replyf(int sock, const char *format, ...) {
 }
 
 // TODO: Consider implementing proper authentication or anonymous login
-bool check_login(const char* username, const char* password) {
+static bool check_login(const char* username, const char* password) {
 	printf("USER \"%s\" logged in with PASS \"%s\"\n", username, password);
 	return true;
 }
@@ -110,7 +108,7 @@ SLIST_HEAD(ClientList, Client) client_list = SLIST_HEAD_INITIALIZER(client_list)
 static bool list_initialized = false;
 
 // Retrieve client struct by its socket
-Client* get_client(int socket) {
+static Client* get_client(int socket) {
 	Client* c;
 	SLIST_FOREACH(c, &client_list, entries) {
 		if (c->socket == socket || c->data_socket == socket) {
@@ -121,7 +119,8 @@ Client* get_client(int socket) {
 	return NULL;
 }
 
-int close_all() {
+// Disconnects all clients and frees their memory
+static int disconnect_all_clients() {
 	while (!SLIST_EMPTY(&client_list)) {
 		Client *c = SLIST_FIRST(&client_list);
 		SLIST_REMOVE_HEAD(&client_list, entries);
@@ -134,7 +133,7 @@ int close_all() {
 }
 
 // Create a new client and initalize it
-Client *client_new(int socket, struct sockaddr_storage *client_addr) {
+static Client *client_new(int socket, struct sockaddr_storage *client_addr) {
 	Client *new_client = malloc(sizeof(Client));
 	if (new_client == NULL) {
 		fprintf(stderr, "error mallocing client!\n");
@@ -155,7 +154,9 @@ Client *client_new(int socket, struct sockaddr_storage *client_addr) {
 	return new_client;
 }
 
-int handle_connect(int listen_sock) {
+// Handle a new incomming connection on listen_sock by
+// creating a new client and welcome it to the server.
+static int handle_connect(int listen_sock) {
 	struct sockaddr_storage client_addr;
 	socklen_t addrlen = sizeof(client_addr);
 
@@ -194,7 +195,9 @@ int handle_connect(int listen_sock) {
 }
 
 
-int handle_disconnect(int client_sock) {
+// Handle a disconnect by removing the client from
+// the connected client list and freeing its memory.
+static int handle_disconnect(int client_sock) {
 	Client* client = get_client(client_sock);
 	assert(client != NULL);
 	printf("user disconnected\n");
@@ -204,13 +207,13 @@ int handle_disconnect(int client_sock) {
 }
 
 // Process data from data connection
-int handle_data(char* buf, Client *client) {
+static int handle_data(char* buf, Client *client) {
 	UNUSED(buf); UNUSED(client);
 	// TODO: PASSV: Implement
 	return 0;
 }
 
-int cwd(Client *client, const char *path) {
+static int cwd(Client *client, const char *path) {
 	static char pathbuf[8192];
 	const char* newpath;
 	const char* pwd = client->cwd;
@@ -266,7 +269,7 @@ int cwd(Client *client, const char *path) {
 }
 
 // Open a active ftp connection by connecting to the clients address
-int open_active(Client *client) {
+static int open_active(Client *client) {
 	int data_socket = socket(AF_INET, SOCK_STREAM, 0);
 	// TODO: Consider using getaddrinfo
 	if (data_socket == -1) {
@@ -288,7 +291,7 @@ int open_active(Client *client) {
 }
 
 // Open active or passive connection depending on setting
-int open_data(Client *client) {
+static int open_data(Client *client) {
 	int data_socket;
 	if (client->passive_mode) {
 		// TODO: PASSV: Use listen socket? Enque listen command?
@@ -302,7 +305,7 @@ int open_data(Client *client) {
 }
 
 // Appends the path child to base and writes the result to dest.
-int path_extend(char* dest, size_t n, const char *base, const char* child) {
+static int path_extend(char* dest, size_t n, const char *base, const char* child) {
 	int len = snprintf(dest, n, "%s/%s", base, child);
 	if (len > (int)n) {
 		fprintf(stderr, "the new path is too long!\n");
@@ -319,8 +322,8 @@ int path_extend(char* dest, size_t n, const char *base, const char* child) {
 	return -1; \
 }
 
-// Handle commands from user once logged in
-int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
+// Handle commands from user once logged in.
+static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 	static char fullpath[PATH_MAX];
 	const int client_sock = client->socket;
 	int data_socket;
@@ -578,42 +581,24 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 	return 0;
 }
 
-// Handle authentication and socket re
-int handle_recv(int client_sock, char* buf) {
-	// Retreive user socket
-	Client* client = get_client(client_sock);
-	assert(client != NULL);
-	const bool is_data_socket = client_sock == client->data_socket ? true : false;
-
-	// TODO: PASSV: Handle DTP socket?
-	if (is_data_socket) {
-		if (handle_data(buf, client) != 0) {
-			fprintf(stderr, "error handling ftp data socket");
-			return -1;
-		}
-		return 0;
-	}
-
-	FtpCmd cmd = parse_ftpcmd(buf);
-	dprintf("command buffer: \"%s\"", buf);
-	dprintf("parsed command: %s\n", keyword_names[cmd.keyword]);
-
+// Hande ftp command depending on the clients state.
+static int handle_ftpcmd(FtpCmd *cmd, Client *client) {
 	switch(client->state) {
 		case Identifying:
 			// Only allow USER command for identification
-			if (cmd.keyword == USER) {
+			if (cmd->keyword == USER) {
 				rreply_client("331 Please authenticate using PASS.\n");
 				client->state = Authenticating;
-				strncpy(client->username, cmd.parameter.string, USERNAME_SIZE);
+				strncpy(client->username, cmd->parameter.string, USERNAME_SIZE);
 			} else {
 				rreply_client("530 Please login using USER and PASS command.\n");
 			}
 			break;
 		case Authenticating:
 			// Only allow PASS command for authentification
-			if (cmd.keyword == PASS) {
+			if (cmd->keyword == PASS) {
 				// check username and password
-				const char* password = cmd.parameter.string;
+				const char* password = cmd->parameter.string;
 				bool logged_in = check_login(client->username, password);
 				if (logged_in) {
 					rreply_client("230 Login successful.\n");
@@ -629,7 +614,7 @@ int handle_recv(int client_sock, char* buf) {
 			break;
 		case LoggedIn:
 			// Allow every command
-			if (handle_ftpcmd(&cmd, client) != 0) {
+			if (handle_ftpcmd_logged_in(cmd, client) != 0) {
 				return -1;
 			}
 			break;
@@ -637,10 +622,37 @@ int handle_recv(int client_sock, char* buf) {
 			fprintf(stderr, "invalid client state: %d\n", client->state);
 			break;
 	}
+	return 0;
+}
+
+// Handle authentication and socket re
+static int handle_recv(int client_sock, char* buf) {
+	// Retreive user socket
+	Client* client = get_client(client_sock);
+	assert(client != NULL);
+	const bool is_data_socket = client_sock == client->data_socket ? true : false;
+
+	// TODO: PASSV: Handle DTP socket?
+	if (is_data_socket) {
+		if (handle_data(buf, client) != 0) {
+			fprintf(stderr, "error handling ftp data socket");
+			return -1;
+		}
+		return 0;
+	}
+
+	// Parse and execute ftp command
+	FtpCmd cmd = parse_ftpcmd(buf);
+	dprintf("command buffer: \"%s\"", buf);
+	dprintf("parsed command: %s\n", keyword_names[cmd.keyword]);
+	handle_ftpcmd(&cmd, client);
 
 	return 0;
 }
 
+// ============================================================================
+// Public API
+// ============================================================================
 int uftpd_init_localhost(uftpd_handle* handle, const char *port) {
 	struct addrinfo hints, *res;
 	memset(&hints, 0, sizeof(hints));
@@ -679,20 +691,20 @@ int uftpd_init(uftpd_handle* handle, struct addrinfo* addr) {
 	FD_SET(listen_socket, &handle->master);
 	handle->fd_max = listen_socket;
 	handle->listen_socket = listen_socket;
+	handle->running = true;
 
 	return 0;
 }
 
 // Event loop of server
 int uftpd_loop(uftpd_handle* handle) {
-	bool running = true;
 	int nbytes;
 	fd_set ready;
 	char buf[128];
 
 	FD_ZERO(&ready);
 
-	while(running) {
+	while(handle->running) {
 		ready = handle->master;
 		if (select(handle->fd_max+1, &ready, NULL, NULL, NULL) == -1) {
 			perror("select");
@@ -709,7 +721,7 @@ int uftpd_loop(uftpd_handle* handle) {
 				int csock;
 				if ((csock = handle_connect(handle->listen_socket)) == -1) {
 					fprintf(stderr, "error handling incomming connection");
-					running = false;
+					handle->running = false;
 				}
 
 				// Add new socket to master list
@@ -740,8 +752,11 @@ int uftpd_loop(uftpd_handle* handle) {
 	} // while(running)
 
 	// close remaining connections
-	close_all();
+	disconnect_all_clients();
 	close(handle->listen_socket);
 	return 0;
 }
 
+void uftpd_stop(uftpd_handle* handle) {
+	handle->running = false;
+}
