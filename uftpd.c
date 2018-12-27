@@ -31,6 +31,8 @@
 #define USERNAME_SIZE 32
 #define DATABUF_SIZE 16384
 
+// Helper macros for less typing
+
 #define STRLEN(s) (sizeof(s)/sizeof(s[0]))
 #define UNUSED(x) (void)(x)
 
@@ -41,11 +43,16 @@
 #define dprintf(fmt, ...)
 #endif
 
-// Macros for less typing
 #define rreply(sock, s) if (send(sock, s, STRLEN(s), 0) == -1) \
 					return -1; \
 
 #define rreply_client(s) rreply(client->socket, s)
+
+#define rreplyf(s, fmt, ...) if (replyf(s, fmt, __VA_ARGS__) == -1) return -1;
+
+#define notify_user(ev, data) do { if(ev_callback != NULL) ev_callback(ev, data); } while (0)
+
+#define notify_user_ctx(ev, data) do { if(ctx->ev_callback != NULL) ctx->ev_callback(ev, data); } while (0)
 
 static int replyf(int sock, const char *format, ...) {
 	#define REPLYBUFLEN 255
@@ -62,9 +69,12 @@ static int replyf(int sock, const char *format, ...) {
 	return 0;
 }
 
+
 // TODO: Consider implementing proper authentication or anonymous login
 static bool check_login(const char* username, const char* password) {
-	printf("USER \"%s\" logged in with PASS \"%s\"\n", username, password);
+	UNUSED(username);
+	UNUSED(password);
+	dprintf("USER \"%s\" logged in with PASS \"%s\"\n", username, password);
 	return true;
 }
 
@@ -156,7 +166,7 @@ static Client *client_new(int socket, struct sockaddr_storage *client_addr) {
 
 // Handle a new incomming connection on listen_sock by
 // creating a new client and welcome it to the server.
-static int handle_connect(int listen_sock) {
+static int handle_connect(int listen_sock, uftpd_callback ev_callback) {
 	struct sockaddr_storage client_addr;
 	socklen_t addrlen = sizeof(client_addr);
 
@@ -181,15 +191,10 @@ static int handle_connect(int listen_sock) {
 	
 	rreply_client("220 uftpd server\r\n");
 
-	// TODO: Notify user using control socket about a new connection?
 	char client_ipstr[INET6_ADDRSTRLEN];
-	printf("new connection from %s:%d on socket %d\n",
-			inet_ntop(client_addr.ss_family, 
-				&((struct sockaddr_in*)&client_addr)->sin_addr,
-				client_ipstr, sizeof(client_ipstr)),
-				((struct sockaddr_in*)&client_addr)->sin_port,
-				newfd);
-
+	inet_ntop(client_addr.ss_family, &((struct sockaddr_in*)&client_addr)->sin_addr,
+					client_ipstr, sizeof(client_ipstr));
+	notify_user(ClientConnected, client_ipstr);
 
 	return newfd;
 }
@@ -197,10 +202,16 @@ static int handle_connect(int listen_sock) {
 
 // Handle a disconnect by removing the client from
 // the connected client list and freeing its memory.
-static void handle_disconnect(int client_sock) {
+static void handle_disconnect(int client_sock, uftpd_callback ev_callback) {
+	UNUSED(ev_callback);
 	Client* client = get_client(client_sock);
 	assert(client != NULL);
-	printf("user disconnected\n");
+
+	char client_ipstr[INET6_ADDRSTRLEN];
+	inet_ntop(AF_INET, &((struct sockaddr_in*)&client->addr)->sin_addr,
+					client_ipstr, sizeof(client_ipstr));
+	notify_user(ClientDisconnected, client_ipstr);
+
 	SLIST_REMOVE(&client_list, client, Client, entries);
 	free(client);
 }
@@ -321,7 +332,10 @@ static int path_extend(char* dest, size_t n, const char *base, const char* child
 	return -1; \
 }
 
+
 // Handle commands from user once logged in.
+// Return -2 on usage error.
+// Return -1 on critical error.
 static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 	static char fullpath[PATH_MAX];
 	const int client_sock = client->socket;
@@ -329,16 +343,16 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 	char type;
 	switch (cmd->keyword) {
 		case PWD: // Print working directory
-			replyf(client_sock, "257 \"%s\"\n", client->cwd);
+			rreplyf(client_sock, "257 \"%s\"\n", client->cwd);
 			break;
 		case CWD: // Change working directory
 			if (cwd(client, cmd->parameter.string) == -1) {
-				return -1;
+				return -2;
 			}
 			break;
 		case CDUP:
 			if (cwd(client, "..") == -1) {
-				return -1;
+				return -2;
 			}
 			break;
 		case PORT: {
@@ -392,7 +406,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 					if (sent_bytes == -1) {
 						perror("send");
 						close(data_socket);
-						return -1;
+						return -2;
 					}
 					reamining_bytes -= sent_bytes;
 					dprintf("remaining %ld bytes\n", reamining_bytes);
@@ -417,7 +431,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			}
 
 			if ((data_socket = open_data(client)) == -1) {
-				return -1;
+				return -2;
 			}
 
 			// Read data from data_socket and write it to created file
@@ -429,6 +443,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 				received_bytes = recv(data_socket, data_buf, sizeof(data_buf), 0);
 				if (received_bytes == -1) {
 					perror("recv");
+					return -2;
 				}
 				dprintf("received %ld bytes\n", received_bytes);
 				reamining_bytes = received_bytes;
@@ -458,7 +473,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
 			if (unlink(fullpath) == -1) {
 				perror("unlink");
-				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
 				return -1;
 			}
 			rreply_client("250 Requested file action okay, completed.\n");
@@ -467,7 +482,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
 			if (rmdir(fullpath) == -1) {
 				perror("rmdir");
-				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
 				return -1;
 			}
 			rreply_client("250 Requested file action okay, completed.\n");
@@ -476,7 +491,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
 			if (mkdir(fullpath, 0755) == -1) {
 				perror("mkdir");
-				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
 				return -1;
 			}
 			rreply_client("250 Requested file action okay, completed.\n");
@@ -487,12 +502,12 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			} break;
 		case RNTO: {
 			if (client->from_path[0] == 0) {
-				replyf(client->socket, "503 Bad sequence of commands. Use RNFR first.\n");
+				rreply_client("503 Bad sequence of commands. Use RNFR first.\n");
 				return -1;
 			}
 			if (rename(client->from_path, cmd->parameter.string) == -1) {
 				perror("rename");
-				replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+				rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
 				client->from_path[0] = 0;
 				return -1;
 			}
@@ -509,13 +524,13 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			// TODO: Buffer first and the send once we know we got no error
 			DIR *dir = opendir(pathname);
 			if (dir == NULL) {
-				replyf(client->socket, "450 Filesystem error: %s\n", strerror(errno));
+				rreplyf(client->socket, "450 Filesystem error: %s\n", strerror(errno));
 				perror("opendir");
 				return -1;
 			}
 
 			if ((data_socket = open_data(client)) == -1) {
-				return -1;
+				return -2;
 			}
 
 			struct dirent* entry;
@@ -549,7 +564,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 
 				const char *fmtstring = "%crw-rw-rw- 1 user group %lu %s %s\r\n";
 				dprintf(fmtstring, filetype, entry_stat.st_size, date_str, entry->d_name);
-				replyf(data_socket, fmtstring, filetype, entry_stat.st_size, date_str, entry->d_name);
+				rreplyf(data_socket, fmtstring, filetype, entry_stat.st_size, date_str, entry->d_name);
 			}
 			closedir(dir);
 			
@@ -561,12 +576,12 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			type = cmd->parameter.code;
 			if (type == 'I') {
 				client->type = Image;
-				replyf(client_sock, "200 Type set to %c.\n", type);
+				rreplyf(client_sock, "200 Type set to %c.\n", type);
 			} else if (type == 'A') {
 				client->type = Ascii;
-				replyf(client_sock, "200 Type set to %c.\n", type);
+				rreplyf(client_sock, "200 Type set to %c.\n", type);
 			} else {
-				replyf(client_sock, "500 Type %c not supported.\n", type);
+				rreplyf(client_sock, "500 Type %c not supported.\n", type);
 			}
 			break;
 		case INVALID:
@@ -580,8 +595,9 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 	return 0;
 }
 
+
 // Hande ftp command depending on the clients state.
-static int handle_ftpcmd(FtpCmd *cmd, Client *client) {
+static int handle_ftpcmd(FtpCmd *cmd, Client *client, uftpd_callback ev_callback) {
 	switch(client->state) {
 		case Identifying:
 			// Only allow USER command for identification
@@ -613,7 +629,9 @@ static int handle_ftpcmd(FtpCmd *cmd, Client *client) {
 			break;
 		case LoggedIn:
 			// Allow every command
-			handle_ftpcmd_logged_in(cmd, client);
+			if (handle_ftpcmd_logged_in(cmd, client) == -2) {
+				notify_user(Error, "FTP Network error");
+			}
 			break;
 		default:
 			fprintf(stderr, "invalid client state: %d\n", client->state);
@@ -623,7 +641,7 @@ static int handle_ftpcmd(FtpCmd *cmd, Client *client) {
 }
 
 // Handle authentication and socket re
-static int handle_recv(int client_sock, char* buf) {
+static int handle_recv(int client_sock, char* buf, uftpd_callback ev_callback) {
 	// Retreive user socket
 	Client* client = get_client(client_sock);
 	assert(client != NULL);
@@ -642,7 +660,7 @@ static int handle_recv(int client_sock, char* buf) {
 	FtpCmd cmd = parse_ftpcmd(buf);
 	dprintf("command buffer: \"%s\"", buf);
 	dprintf("parsed command: %s\n", keyword_names[cmd.keyword]);
-	return handle_ftpcmd(&cmd, client);
+	return handle_ftpcmd(&cmd, client, ev_callback);
 }
 
 // ============================================================================
@@ -700,6 +718,7 @@ int uftpd_start(uftpd_ctx* ctx) {
 
 	FD_ZERO(&ready);
 
+	notify_user_ctx(ServerStarted, NULL);
 	while(ctx->running) {
 		ready = ctx->master;
 		if (select(ctx->fd_max+1, &ready, NULL, NULL, NULL) == -1) {
@@ -708,14 +727,14 @@ int uftpd_start(uftpd_ctx* ctx) {
 		}
 		int fdmax = ctx->fd_max;
 
-		for (int i = 0; i <= fdmax; i++) {
-			if (!FD_ISSET(i, &ready)) {
+		for (int sock = 0; sock <= fdmax; sock++) {
+			if (!FD_ISSET(sock, &ready)) {
 				continue;
 			}
 
-			if (i == ctx->listen_socket) {
+			if (sock == ctx->listen_socket) {
 				int csock;
-				if ((csock = handle_connect(ctx->listen_socket)) == -1) {
+				if ((csock = handle_connect(ctx->listen_socket, ctx->ev_callback)) == -1) {
 					fprintf(stderr, "error handling incomming connection");
 					ctx->running = false;
 				}
@@ -726,26 +745,26 @@ int uftpd_start(uftpd_ctx* ctx) {
 					fdmax = csock;
 				}
 			} else { // data socket
-				if ((nbytes = recv(i, buf, sizeof(buf), 0)) <= 0) {
+				if ((nbytes = recv(sock, buf, sizeof(buf), 0)) <= 0) {
 					// ctx error or disconnect
 					if (nbytes == 0) {
-						handle_disconnect(i);
+						handle_disconnect(sock, ctx->ev_callback);
 					} else {
 						perror("recv");
 					}
-					close(i);
-					FD_CLR(i, &ctx->master);
+					close(sock);
+					FD_CLR(sock, &ctx->master);
 					continue; // skip to next socket
 				}
 
 				// nbytes > 0
 				assert(nbytes > 0);
 				buf[nbytes] = '\0';
-				if (handle_recv(i, buf) == -1) {
+				if (handle_recv(sock, buf, ctx->ev_callback) == -1) {
 					fprintf(stderr, "error handling package\n");
 					ctx->running = false;
 				}
-			} // i == listen_sock
+			} // sock == listen_sock
 			ctx->fd_max = fdmax;
 		} // for all sockets
 	} // while(running)
@@ -753,6 +772,7 @@ int uftpd_start(uftpd_ctx* ctx) {
 	// close remaining connections
 	disconnect_all_clients();
 	close(ctx->listen_socket);
+	notify_user_ctx(ServerStopped, NULL);
 	return 0;
 }
 

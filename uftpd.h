@@ -18,7 +18,7 @@ typedef enum uftpd_event {
 
 /// An event handling callback recieves the class of event and
 /// optional context information.
-typedef void (*uftpd_callback)(enum uftpd_event ev, void *context);
+typedef void (*uftpd_callback)(enum uftpd_event ev, const char *details);
 
 /// Handle for every server instance.
 typedef struct uftpd_ctx {

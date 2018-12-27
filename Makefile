@@ -1,5 +1,5 @@
 # CC = musl-gcc
-CFLAGS  := -Wall -Wextra -Os
+CFLAGS  := -Wall -Wextra -O0 -g
 LDFLAGS := -flto
 
 TARGET := uftpd
