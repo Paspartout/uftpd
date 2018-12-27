@@ -6,7 +6,7 @@
 #include "uftpd.h"
 #define UNUSED(x) (void)(x)
 
-uftpd_handle handle;
+uftpd_ctx handle;
 void handle_sig(int sig) {
 	UNUSED(sig);
 	uftpd_stop(&handle);
@@ -20,8 +20,8 @@ int main() {
 	sigaction(SIGTERM, &act, NULL);
 	sigaction(SIGINT, &act, NULL);
 
-	uftpd_init_localhost(&handle, "1033");
-	uftpd_loop(&handle);
+	uftpd_init_localhost(&handle, "1032");
+	uftpd_start(&handle);
 
 	return 0;
 }

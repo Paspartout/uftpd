@@ -197,13 +197,12 @@ static int handle_connect(int listen_sock) {
 
 // Handle a disconnect by removing the client from
 // the connected client list and freeing its memory.
-static int handle_disconnect(int client_sock) {
+static void handle_disconnect(int client_sock) {
 	Client* client = get_client(client_sock);
 	assert(client != NULL);
 	printf("user disconnected\n");
 	SLIST_REMOVE(&client_list, client, Client, entries);
 	free(client);
-	return 0;
 }
 
 // Process data from data connection
@@ -614,9 +613,7 @@ static int handle_ftpcmd(FtpCmd *cmd, Client *client) {
 			break;
 		case LoggedIn:
 			// Allow every command
-			if (handle_ftpcmd_logged_in(cmd, client) != 0) {
-				return -1;
-			}
+			handle_ftpcmd_logged_in(cmd, client);
 			break;
 		default:
 			fprintf(stderr, "invalid client state: %d\n", client->state);
@@ -645,15 +642,13 @@ static int handle_recv(int client_sock, char* buf) {
 	FtpCmd cmd = parse_ftpcmd(buf);
 	dprintf("command buffer: \"%s\"", buf);
 	dprintf("parsed command: %s\n", keyword_names[cmd.keyword]);
-	handle_ftpcmd(&cmd, client);
-
-	return 0;
+	return handle_ftpcmd(&cmd, client);
 }
 
 // ============================================================================
 // Public API
 // ============================================================================
-int uftpd_init_localhost(uftpd_handle* handle, const char *port) {
+int uftpd_init_localhost(uftpd_ctx* ctx, const char *port) {
 	struct addrinfo hints, *res;
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
@@ -665,11 +660,11 @@ int uftpd_init_localhost(uftpd_handle* handle, const char *port) {
 		return -1;
 	}
 	
-	return uftpd_init(handle, res);
+	return uftpd_init(ctx, res);
 }
 
 // Prepare to go into listen/event loop
-int uftpd_init(uftpd_handle* handle, struct addrinfo* addr) {
+int uftpd_init(uftpd_ctx* ctx, struct addrinfo* addr) {
 	int listen_socket = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
 	if (listen_socket == -1) {
 		perror("socket");
@@ -686,77 +681,85 @@ int uftpd_init(uftpd_handle* handle, struct addrinfo* addr) {
 		return -1;
 	}
 	
-	FD_ZERO(&handle->master);
+	FD_ZERO(&ctx->master);
 
-	FD_SET(listen_socket, &handle->master);
-	handle->fd_max = listen_socket;
-	handle->listen_socket = listen_socket;
-	handle->running = true;
+	FD_SET(listen_socket, &ctx->master);
+	ctx->fd_max = listen_socket;
+	ctx->listen_socket = listen_socket;
+	ctx->running = true;
+	ctx->ev_callback = NULL;
 
 	return 0;
 }
 
 // Event loop of server
-int uftpd_loop(uftpd_handle* handle) {
+int uftpd_start(uftpd_ctx* ctx) {
 	int nbytes;
 	fd_set ready;
 	char buf[128];
 
 	FD_ZERO(&ready);
 
-	while(handle->running) {
-		ready = handle->master;
-		if (select(handle->fd_max+1, &ready, NULL, NULL, NULL) == -1) {
+	while(ctx->running) {
+		ready = ctx->master;
+		if (select(ctx->fd_max+1, &ready, NULL, NULL, NULL) == -1) {
 			perror("select");
 			break;
 		}
-		int fdmax = handle->fd_max;
+		int fdmax = ctx->fd_max;
 
 		for (int i = 0; i <= fdmax; i++) {
 			if (!FD_ISSET(i, &ready)) {
 				continue;
 			}
 
-			if (i == handle->listen_socket) {
+			if (i == ctx->listen_socket) {
 				int csock;
-				if ((csock = handle_connect(handle->listen_socket)) == -1) {
+				if ((csock = handle_connect(ctx->listen_socket)) == -1) {
 					fprintf(stderr, "error handling incomming connection");
-					handle->running = false;
+					ctx->running = false;
 				}
 
 				// Add new socket to master list
-				FD_SET(csock, &handle->master); 
+				FD_SET(csock, &ctx->master); 
 				if (csock > fdmax) {
 					fdmax = csock;
 				}
 			} else { // data socket
 				if ((nbytes = recv(i, buf, sizeof(buf), 0)) <= 0) {
-					// Handle error or disconnect
+					// ctx error or disconnect
 					if (nbytes == 0) {
 						handle_disconnect(i);
 					} else {
 						perror("recv");
 					}
 					close(i);
-					FD_CLR(i, &handle->master);
+					FD_CLR(i, &ctx->master);
 					continue; // skip to next socket
 				}
 
 				// nbytes > 0
 				assert(nbytes > 0);
 				buf[nbytes] = '\0';
-				handle_recv(i, buf);
+				if (handle_recv(i, buf) == -1) {
+					fprintf(stderr, "error handling package\n");
+					ctx->running = false;
+				}
 			} // i == listen_sock
-			handle->fd_max = fdmax;
+			ctx->fd_max = fdmax;
 		} // for all sockets
 	} // while(running)
 
 	// close remaining connections
 	disconnect_all_clients();
-	close(handle->listen_socket);
+	close(ctx->listen_socket);
 	return 0;
 }
 
-void uftpd_stop(uftpd_handle* handle) {
-	handle->running = false;
+void uftpd_stop(uftpd_ctx* ctx) {
+	ctx->running = false;
+}
+
+void uftpd_set_ev_callback(uftpd_ctx* ctx, uftpd_callback callback) {
+	ctx->ev_callback = callback;
 }
