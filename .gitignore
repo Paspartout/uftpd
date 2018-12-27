@@ -1,3 +1,4 @@
 *.o
 cmdparser.c
 uftpd
+libuftpd

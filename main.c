@@ -1,6 +1,6 @@
-#include <stdio.h>
-#include <stdbool.h>
 #include <signal.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "uftpd.h"
@@ -14,11 +14,7 @@ static void handle_sig(int sig) {
 }
 
 const char *event_names[] = {
-	"ServerStarted",
-	"ServerStopped",
-	"ClientConnected",
-	"ClientDisconnected",
-	"Error",
+    "ServerStarted", "ServerStopped", "ClientConnected", "ClientDisconnected", "Error",
 };
 
 static void callback(uftpd_event ev, const char *details) {
@@ -42,4 +38,3 @@ int main() {
 
 	return 0;
 }
-
