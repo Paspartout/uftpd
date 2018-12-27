@@ -35,11 +35,12 @@
 #define STRLEN(s) (sizeof(s)/sizeof(s[0]))
 #define UNUSED(x) (void)(x)
 
-#ifndef DEBUG
-#define DEBUG 0
-#endif
+#ifdef DEBUG
 #define dprintf(fmt, ...) \
-	            do { if (DEBUG) fprintf(stderr, fmt, __VA_ARGS__); } while (0)
+	            do { fprintf(stderr, fmt, __VA_ARGS__); } while (0)
+#else
+#define dprintf(fmt, ...)
+#endif
 
 // Macros for less typing
 #define rreply(sock, s) if (send(sock, s, STRLEN(s), 0) == -1) \
@@ -538,9 +539,9 @@ int handle_ftpcmd(const FtpCmd *cmd, Client *client) {
 				// https://pubs.opengroup.org/onlinepubs/9699919799/utilities/ls.html
 				char date_str[24];
 				const char *date_fmt = "%b %d %H:%M";
-				time_t mtime = entry_stat.st_mtim.tv_sec;
+				time_t mtime = entry_stat.st_mtime;
 				// Display year if file is older than 6 months
-				if (time(NULL) > entry_stat.st_mtim.tv_sec + 6*30*24*60*60)
+				if (time(NULL) > entry_stat.st_mtime + 6*30*24*60*60)
 					date_fmt = "%b %d  %Y";
 				strftime(date_str, 24, date_fmt, localtime(&mtime));
 
