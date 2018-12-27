@@ -48,7 +48,7 @@
 
 #define rreply_client(s) rreply(client->socket, s)
 
-#define rreplyf(s, fmt, ...) if (replyf(s, fmt, __VA_ARGS__) == -1) return -1;
+#define rreplyf(s, fmt, ...) if (replyf(s, fmt, __VA_ARGS__) == -1) return -2;
 
 #define notify_user(ev, data) do { if(ev_callback != NULL) ev_callback(ev, data); } while (0)
 
@@ -88,8 +88,15 @@ enum ClientState {
 
 // The data representation type used for data transfer and storage.
 enum TranfserType {
-	Ascii,
 	Image,
+	Ascii,
+};
+
+// The data structure type used for data transfer and storage.
+enum StructureType {
+	File,
+	Record,
+	Page,
 };
 
 typedef struct Client {
@@ -99,7 +106,8 @@ typedef struct Client {
 
 	char username[USERNAME_SIZE];
 	char cwd[PATH_MAX];
-	enum TranfserType type;
+	enum TranfserType ttype;
+	enum StructureType stype;
 
 	// Adress and port used for active or passive ftp?
 	bool passive_mode;
@@ -153,7 +161,7 @@ static Client *client_new(int socket, struct sockaddr_storage *client_addr) {
 	new_client->socket = socket;
 	new_client->state = Identifying;
 	new_client->data_socket = -1;
-	new_client->type = Ascii;
+	new_client->ttype = Image;
 	new_client->passive_mode = false;
 	new_client->from_path[0] = 0;
 
@@ -370,7 +378,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			rreply_client("200 PORT was set.\n");
 			} break;
 		//case PASV:
-			// TODO: PASSV: Listen on new dataport and print addr of it
+			// TODO: PASSV: Listen on new dataport and reply with addr of it
 			//break;
 		case RETR: {
 			// Do it
@@ -575,14 +583,23 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		case TYPE: // Set the data representation type
 			type = cmd->parameter.code;
 			if (type == 'I') {
-				client->type = Image;
-				rreplyf(client_sock, "200 Type set to %c.\n", type);
-			} else if (type == 'A') {
-				client->type = Ascii;
+				client->ttype = Image;
 				rreplyf(client_sock, "200 Type set to %c.\n", type);
 			} else {
 				rreplyf(client_sock, "500 Type %c not supported.\n", type);
 			}
+			break;
+		case STRU: // Set the data structure
+			type = cmd->parameter.code;
+			if (type == 'F') {
+				client->stype = File;
+				rreplyf(client_sock, "200 Structure set to %c.\n", type);
+			} else {
+				rreplyf(client_sock, "500 Type %c not supported.\n", type);
+			}
+			break;
+		case NOOP:
+			rreply(client_sock, "200 Successfully did nothing.\n");
 			break;
 		case INVALID:
 			rreply(client_sock, "500 Invalid command.\n");
