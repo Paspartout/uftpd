@@ -175,7 +175,7 @@ static Client *client_new(int socket, struct sockaddr_storage *client_addr, cons
 	new_client->ttype = Image;
 	new_client->passive_mode = false;
 	new_client->from_path[0] = 0;
-	strncpy(new_client->cwd, start_dir, strlen(start_dir));
+	strncpy(new_client->cwd, start_dir, PATH_MAX);
 
 	// Use client address and default port 20 for active mode
 	new_client->addr.sin_port = htons(20);
