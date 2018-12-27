@@ -12,10 +12,14 @@ Building
 
 Simply type `make` to build the library and example server.
 
+If you wan't to modify the command parser you have to install [re2c](http://re2c.org/)
+which is used to generate the `cmdparser.c` file from `cmdparser.re`.
+
 API
 ---
 
 The server can be used as a library. 
+
 Look at the uftpd.h file for the exposed functions and main.c for an example
 on how to use them.
 
