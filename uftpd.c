@@ -303,7 +303,7 @@ static int cwd(Client *client, const char *path) {
 		// Go to specified relative path
 		rpath_extend(pathbuf, sizeof(pathbuf), client->cwd, path);
 	}
-	printf("newpath: \"%s\"\n", pathbuf);
+	dprintf("newpath: \"%s\"\n", pathbuf);
 
 	// Make sure the folder exists
 	struct stat dest_stat;
@@ -397,11 +397,16 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 	// TODO: PASSV: Listen on new dataport and reply with addr of it
 	// break;
 	case RETR: {
-		// Do it
-		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
+		const char *path = cmd->parameter.string;
+		if (path[0] != '/') {
+			// path is relative: resolve it using cwd
+			rpath_extend(fullpath, PATH_MAX, client->cwd, path);
+			path = fullpath;
+		}
+
 		dprintf("opening file %s\n", fullpath);
 
-		FILE *f = fopen(fullpath, "r");
+		FILE *f = fopen(path, "r");
 		if (f == NULL) {
 			replyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			perror("fopen");
@@ -444,10 +449,15 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case STOR: {
-		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
+		const char *path = cmd->parameter.string;
+		if (path[0] != '/') {
+			// path is relative: resolve it using cwd
+			rpath_extend(fullpath, PATH_MAX, client->cwd, path);
+			path = fullpath;
+		}
 
 		// Try to create file by opening it for writing
-		FILE *f = fopen(fullpath, "w");
+		FILE *f = fopen(path, "w");
 		if (f == NULL) {
 			replyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			perror("fopen");
