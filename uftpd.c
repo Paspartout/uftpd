@@ -74,6 +74,12 @@
 		return -1;                                                                                 \
 	}
 
+#define rpath_resolve(dest, base, child)                                                           \
+	if (path_resolve(dest, base, child) < 0) {                                                     \
+		rreply(client->socket, "500 Internal error: Path is too long!");                           \
+		return -1;                                                                                 \
+	}
+
 static int replyf(int sock, const char *format, ...) {
 #define REPLYBUFLEN 255
 	static char reply_buf[REPLYBUFLEN];
@@ -88,8 +94,7 @@ static int replyf(int sock, const char *format, ...) {
 
 	return 0;
 }
-
-// Appends the path child to base and writes the result to dest.
+/// Appends the path child to base and writes the result to dest.
 static int path_extend(char *dest, size_t n, const char *base, const char *child) {
 	int len = snprintf(dest, n, "%s/%s", base, child);
 	if (len > (int)n) {
@@ -98,6 +103,23 @@ static int path_extend(char *dest, size_t n, const char *base, const char *child
 	} else if (len < 0) {
 		perror("snprintf");
 		return -2;
+	}
+	return 0;
+}
+
+/// If child is a realative path then append the path child to base and writes the result to dest.
+/// Otherwise simply set dest to child.
+static char fullpath_resolve[PATH_MAX];
+static int path_resolve(char **dest, const char *base, const char *child) {
+	if (child[0] == '/') {
+		// path is absolute: just copy pointer to dest
+		*dest = (char *)child;
+	} else {
+		// path is relative: extend it using cwd
+		if (path_extend(fullpath_resolve, sizeof(fullpath_resolve), base, child) != 0) {
+			return -1;
+		}
+		*dest = fullpath_resolve;
 	}
 	return 0;
 }
@@ -262,8 +284,9 @@ static int handle_data(char *buf, Client *client) {
 	return 0;
 }
 
-static int cwd(Client *client, const char *path) {
-	static char pathbuf[8192];
+static int handle_cwd(Client *client, const char *path) {
+	static char pathbuf[PATH_MAX];
+	char *newpath;
 	const char *pwd = client->cwd;
 
 	// Handle .. and .
@@ -291,6 +314,7 @@ static int cwd(Client *client, const char *path) {
 		if (len > 1 && pathbuf[len - 1] == '/')
 			len--;
 		pathbuf[len] = '\0';
+		newpath = pathbuf;
 	} else if (path[0] == '/') {
 		// Go to specified absoule path
 		strncpy(pathbuf, path, PATH_MAX);
@@ -299,15 +323,16 @@ static int cwd(Client *client, const char *path) {
 		const int len = strlen(pathbuf);
 		if (len > 1 && pathbuf[len - 1] == '/')
 			pathbuf[len - 1] = '\0';
+		newpath = pathbuf;
 	} else {
 		// Go to specified relative path
-		rpath_extend(pathbuf, sizeof(pathbuf), client->cwd, path);
+		rpath_resolve(&newpath, client->cwd, path);
 	}
-	dprintf("newpath: \"%s\"\n", pathbuf);
+	dprintf("newpath: \"%s\"\n", newpath);
 
 	// Make sure the folder exists
 	struct stat dest_stat;
-	if (stat(pathbuf, &dest_stat) == -1) {
+	if (stat(newpath, &dest_stat) == -1) {
 		replyf(client->socket, "431 Error changing directory: %s\r\n", strerror(errno));
 		return -1;
 	}
@@ -316,7 +341,7 @@ static int cwd(Client *client, const char *path) {
 		return -1;
 	}
 
-	strncpy(client->cwd, pathbuf, PATH_MAX);
+	strncpy(client->cwd, newpath, PATH_MAX);
 	rreply_client("200 Working directory changed.\r\n");
 	return 0;
 }
@@ -361,21 +386,21 @@ static int open_data(Client *client) {
 // Return -2 on usage error.
 // Return -1 on network/critical error.
 static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
-	static char fullpath[PATH_MAX];
 	const int client_sock = client->socket;
 	int data_socket;
 	char type;
+	char *path;
 	switch (cmd->keyword) {
 	case PWD: // Print working directory
 		rreplyf(client_sock, "257 \"%s\"\r\n", client->cwd);
 		break;
 	case CWD: // Change working directory
-		if (cwd(client, cmd->parameter.string) == -1) {
+		if (handle_cwd(client, cmd->parameter.string) == -1) {
 			return -2;
 		}
 		break;
 	case CDUP:
-		if (cwd(client, "..") == -1) {
+		if (handle_cwd(client, "..") == -1) {
 			return -2;
 		}
 		break;
@@ -397,14 +422,8 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 	// TODO: PASSV: Listen on new dataport and reply with addr of it
 	// break;
 	case RETR: {
-		const char *path = cmd->parameter.string;
-		if (path[0] != '/') {
-			// path is relative: resolve it using cwd
-			rpath_extend(fullpath, PATH_MAX, client->cwd, path);
-			path = fullpath;
-		}
-
-		dprintf("opening file %s\n", fullpath);
+		rpath_resolve(&path, client->cwd, cmd->parameter.string);
+		dprintf("opening file %s\n", path);
 
 		FILE *f = fopen(path, "r");
 		if (f == NULL) {
@@ -449,12 +468,8 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case STOR: {
-		const char *path = cmd->parameter.string;
-		if (path[0] != '/') {
-			// path is relative: resolve it using cwd
-			rpath_extend(fullpath, PATH_MAX, client->cwd, path);
-			path = fullpath;
-		}
+		rpath_resolve(&path, client->cwd, cmd->parameter.string);
+		dprintf("opening file %s\n", path);
 
 		// Try to create file by opening it for writing
 		FILE *f = fopen(path, "w");
@@ -504,8 +519,8 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		fclose(f);
 	} break;
 	case DELE: {
-		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
-		if (unlink(fullpath) == -1) {
+		rpath_resolve(&path, client->cwd, cmd->parameter.string);
+		if (unlink(path) == -1) {
 			perror("unlink");
 			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			return -2;
@@ -513,8 +528,8 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case RMD: {
-		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
-		if (rmdir(fullpath) == -1) {
+		rpath_resolve(&path, client->cwd, cmd->parameter.string);
+		if (rmdir(path) == -1) {
 			perror("rmdir");
 			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			return -2;
@@ -522,8 +537,8 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case MKD: {
-		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
-		if (mkdir(fullpath, 0755) == -1) {
+		rpath_resolve(&path, client->cwd, cmd->parameter.string);
+		if (mkdir(path, 0755) == -1) {
 			perror("mkdir");
 			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			return -2;
@@ -531,15 +546,17 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case RNFR: {
-		rpath_extend(client->from_path, PATH_MAX, client->cwd, cmd->parameter.string);
+		rpath_resolve(&path, client->cwd, cmd->parameter.string);
+		strncpy(client->from_path, path, PATH_MAX);
 		rreply_client("350 Please specify destination using RNTO now.\r\n");
 	} break;
 	case RNTO: {
+		rpath_resolve(&path, client->cwd, cmd->parameter.string);
 		if (client->from_path[0] == 0) {
 			rreply_client("503 Bad sequence of commands. Use RNFR first.\r\n");
 			return -2;
 		}
-		if (rename(client->from_path, cmd->parameter.string) == -1) {
+		if (rename(client->from_path, path) == -1) {
 			perror("rename");
 			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			client->from_path[0] = 0;
@@ -573,8 +590,8 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 				continue;
 			}
 			struct stat entry_stat;
-			rpath_extend(fullpath, sizeof(fullpath), client->cwd, entry->d_name);
-			if (stat(fullpath, &entry_stat) == -1) {
+			rpath_extend(fullpath_resolve, sizeof(fullpath_resolve), client->cwd, entry->d_name);
+			if (stat(fullpath_resolve, &entry_stat) == -1) {
 				perror("stat");
 				continue;
 			}
