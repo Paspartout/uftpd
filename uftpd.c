@@ -33,7 +33,7 @@
 
 // Helper macros for less typing
 
-#define STRLEN(s) (sizeof(s) / sizeof(s[0]))
+#define STRLEN(s) ((sizeof(s) / sizeof(s[0]))-1)
 #define UNUSED(x) (void)(x)
 
 #ifdef DEBUG
@@ -271,7 +271,7 @@ static int cwd(Client *client, const char *path) {
 		// Go up
 		if (strlen(pwd) <= 1 && pwd[0] == '/') {
 			// Cant go up anymore
-			rreply_client("431 Error changing directory: Already at topmost directory\n");
+			rreply_client("431 Error changing directory: Already at topmost directory\r\n");
 			return -1;
 		}
 
@@ -304,16 +304,16 @@ static int cwd(Client *client, const char *path) {
 	// Make sure the folder exists
 	struct stat dest_stat;
 	if (stat(newpath, &dest_stat) == -1) {
-		replyf(client->socket, "431 Error changing directory: %s\n", strerror(errno));
+		replyf(client->socket, "431 Error changing directory: %s\r\n", strerror(errno));
 		return -1;
 	}
 	if (!S_ISDIR(dest_stat.st_mode)) {
-		replyf(client->socket, "431 %s is not a directory!\n", path);
+		replyf(client->socket, "431 %s is not a directory!\r\n", path);
 		return -1;
 	}
 
 	strncpy(client->cwd, newpath, PATH_MAX);
-	rreply_client("200 Working directory changed.\n");
+	rreply_client("200 Working directory changed.\r\n");
 	return 0;
 }
 
@@ -322,15 +322,15 @@ static int open_active(Client *client) {
 	int data_socket = socket(AF_INET, SOCK_STREAM, 0);
 	// TODO: Consider using getaddrinfo
 	if (data_socket == -1) {
-		replyf(client->socket, "500 Connection error: %s\n", strerror(errno));
+		replyf(client->socket, "500 Connection error: %s\r\n", strerror(errno));
 		perror("socket");
 		return -1;
 	}
 
-	rreply_client("150 File status okay; about to open data connection.\n");
+	rreply_client("150 File status okay; about to open data connection.\r\n");
 	int res = connect(data_socket, (struct sockaddr *)&(client->addr), sizeof(client->addr));
 	if (res == -1) {
-		replyf(client->socket, "500 Connection error: %s\n", strerror(errno));
+		replyf(client->socket, "500 Connection error: %s\r\n", strerror(errno));
 		perror("connect");
 		close(data_socket);
 		return -1;
@@ -363,7 +363,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 	char type;
 	switch (cmd->keyword) {
 	case PWD: // Print working directory
-		rreplyf(client_sock, "257 \"%s\"\n", client->cwd);
+		rreplyf(client_sock, "257 \"%s\"\r\n", client->cwd);
 		break;
 	case CWD: // Change working directory
 		if (cwd(client, cmd->parameter.string) == -1) {
@@ -387,7 +387,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		// TODO: Probably don't do this and use inet_pton
 		client->addr.sin_addr.s_addr = ip3 << 24 | ip2 << 16 | ip1 << 8 | ip0;
 		client->addr.sin_port = port1 << 8 | port0;
-		rreply_client("200 PORT was set.\n");
+		rreply_client("200 PORT was set.\r\n");
 	} break;
 	// case PASV:
 	// TODO: PASSV: Listen on new dataport and reply with addr of it
@@ -399,7 +399,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 
 		FILE *f = fopen(fullpath, "r");
 		if (f == NULL) {
-			replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+			replyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			perror("fopen");
 			return -2;
 		}
@@ -435,9 +435,9 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 
 		fclose(f);
 
-		rreply_client("226 Closing data connection.\n");
+		rreply_client("226 Closing data connection.\r\n");
 		close(data_socket);
-		rreply_client("250 Requested file action okay, completed.\n");
+		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case STOR: {
 		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
@@ -445,7 +445,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		// Try to create file by opening it for writing
 		FILE *f = fopen(fullpath, "w");
 		if (f == NULL) {
-			replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+			replyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			perror("fopen");
 			return -2;
 		}
@@ -473,7 +473,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 				written_bytes = fwrite(data_buf, 1, received_bytes, f);
 				dprintf("written %ld bytes\n", written_bytes);
 				if (ferror(f)) {
-					replyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+					replyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 					perror("fwrite");
 					fclose(f);
 					return -1;
@@ -483,9 +483,9 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			}
 		} while (received_bytes > 0);
 
-		rreply_client("226 Closing data connection.\n");
+		rreply_client("226 Closing data connection.\r\n");
 		close(data_socket);
-		rreply_client("250 Requested file action okay, completed.\n");
+		rreply_client("250 Requested file action okay, completed.\r\n");
 
 		fclose(f);
 	} break;
@@ -493,46 +493,46 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
 		if (unlink(fullpath) == -1) {
 			perror("unlink");
-			rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			return -2;
 		}
-		rreply_client("250 Requested file action okay, completed.\n");
+		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case RMD: {
 		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
 		if (rmdir(fullpath) == -1) {
 			perror("rmdir");
-			rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			return -2;
 		}
-		rreply_client("250 Requested file action okay, completed.\n");
+		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case MKD: {
 		rpath_extend(fullpath, PATH_MAX, client->cwd, cmd->parameter.string);
 		if (mkdir(fullpath, 0755) == -1) {
 			perror("mkdir");
-			rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			return -2;
 		}
-		rreply_client("250 Requested file action okay, completed.\n");
+		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case RNFR: {
 		rpath_extend(client->from_path, PATH_MAX, client->cwd, cmd->parameter.string);
-		rreply_client("350 Please specify destination using RNTO now.\n");
+		rreply_client("350 Please specify destination using RNTO now.\r\n");
 	} break;
 	case RNTO: {
 		if (client->from_path[0] == 0) {
-			rreply_client("503 Bad sequence of commands. Use RNFR first.\n");
+			rreply_client("503 Bad sequence of commands. Use RNFR first.\r\n");
 			return -2;
 		}
 		if (rename(client->from_path, cmd->parameter.string) == -1) {
 			perror("rename");
-			rreplyf(client->socket, "550 Filesystem error: %s\n", strerror(errno));
+			rreplyf(client->socket, "550 Filesystem error: %s\r\n", strerror(errno));
 			client->from_path[0] = 0;
 			return -2;
 		}
 		client->from_path[0] = 0;
-		rreply_client("250 Requested file action okay, completed.\n");
+		rreply_client("250 Requested file action okay, completed.\r\n");
 	} break;
 	case LIST: {
 		const char *pathname = client->cwd;
@@ -545,7 +545,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		DIR *dir = opendir(pathname);
 		if (dir == NULL) {
 			perror("opendir");
-			rreplyf(client->socket, "450 Filesystem error: %s\n", strerror(errno));
+			rreplyf(client->socket, "450 Filesystem error: %s\r\n", strerror(errno));
 			return -2;
 		}
 
@@ -587,37 +587,37 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 			rreplyf(data_socket, fmtstring, filetype, entry_stat.st_size, date_str, entry->d_name);
 		}
 		closedir(dir);
-
-		rreply_client("226 Closing data connection.\n");
+		rreply_client("226 Closing data connection.\r\n");
 		close(data_socket);
-		rreply_client("250 Requested file action okay, completed.\n");
 	} break;
 	case TYPE: // Set the data representation type
 		type = cmd->parameter.code;
 		if (type == 'I') {
 			client->ttype = Image;
-			rreplyf(client_sock, "200 Type set to %c.\n", type);
+			rreplyf(client_sock, "200 Type set to %c.\r\n", type);
+		} else if (type == 'A'){
+			rreplyf(client_sock, "200 Type set to %c.\r\n", type);
 		} else {
-			rreplyf(client_sock, "500 Type %c not supported.\n", type);
+			rreplyf(client_sock, "500 Type %c not supported.\r\n", type);
 		}
 		break;
 	case STRU: // Set the data structure
 		type = cmd->parameter.code;
 		if (type == 'F') {
 			client->stype = File;
-			rreplyf(client_sock, "200 Structure set to %c.\n", type);
+			rreplyf(client_sock, "200 Structure set to %c.\r\n", type);
 		} else {
-			rreplyf(client_sock, "500 Type %c not supported.\n", type);
+			rreplyf(client_sock, "500 Type %c not supported.\r\n", type);
 		}
 		break;
 	case NOOP:
-		rreply(client_sock, "200 Successfully did nothing.\n");
+		rreply(client_sock, "200 Successfully did nothing.\r\n");
 		break;
 	case INVALID:
-		rreply(client_sock, "500 Invalid command.\n");
+		rreply(client_sock, "504 Invalid command.\r\n");
 		break;
 	default:
-		rreply(client_sock, "502 Command parsed but not implemented yet.\n");
+		rreply(client_sock, "502 Command parsed but not implemented yet.\r\n");
 		return -2;
 		break;
 	}
@@ -630,11 +630,11 @@ static int handle_ftpcmd(FtpCmd *cmd, Client *client, uftpd_callback ev_callback
 	case Identifying:
 		// Only allow USER command for identification
 		if (cmd->keyword == USER) {
-			rreply_client("331 Please authenticate using PASS.\n");
+			rreply_client("331 Please authenticate using PASS.\r\n");
 			client->state = Authenticating;
 			strncpy(client->username, cmd->parameter.string, USERNAME_SIZE);
 		} else {
-			rreply_client("530 Please login using USER and PASS command.\n");
+			rreply_client("530 Please login using USER and PASS command.\r\n");
 		}
 		break;
 	case Authenticating:
@@ -644,14 +644,14 @@ static int handle_ftpcmd(FtpCmd *cmd, Client *client, uftpd_callback ev_callback
 			const char *password = cmd->parameter.string;
 			bool logged_in = check_login(client->username, password);
 			if (logged_in) {
-				rreply_client("230 Login successful.\n");
+				rreply_client("230 Login successful.\r\n");
 				client->state = LoggedIn;
 			} else {
-				rreply_client("530 Wrong password.\n");
+				rreply_client("530 Wrong password.\r\n");
 				client->state = Identifying;
 			}
 		} else {
-			rreply_client("530 Please use PASS to authenticate.\n");
+			rreply_client("530 Please use PASS to authenticate.\r\n");
 		}
 		break;
 	case LoggedIn:
@@ -661,7 +661,7 @@ static int handle_ftpcmd(FtpCmd *cmd, Client *client, uftpd_callback ev_callback
 		}
 		break;
 	default:
-		fprintf(stderr, "invalid client state: %d\n", client->state);
+		fprintf(stderr, "invalid client state: %d\r\n", client->state);
 		break;
 	}
 	return 0;
