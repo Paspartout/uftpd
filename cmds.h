@@ -45,11 +45,7 @@ enum FtpKeyword {
 
 extern const char *keyword_names[];
 
-#ifndef PATH_MAX
-#define PATH_MAX 4096
-#endif
-
-#define MAX_STRSIZE PATH_MAX
+#define MAX_STRSIZE 512
 
 typedef struct FtpCmd {
 	enum FtpKeyword keyword;
