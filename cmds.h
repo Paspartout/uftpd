@@ -45,14 +45,16 @@ enum FtpKeyword {
 
 extern const char* keyword_names[];
 
-#define MAX_STRSIZE 255
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 typedef struct FtpCmd {
 	enum FtpKeyword keyword;
 	
 	// Parameters
 	union {
-		char string[MAX_STRSIZE]; // for pathname, username, ...
+		char string[PATH_MAX]; // for pathname, username, ...
 		uint8_t numbers[6]; // host-number followed by port-number
 		char code; // type/mode/structure code
 	} parameter;

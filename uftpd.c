@@ -28,6 +28,7 @@
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
+
 #define USERNAME_SIZE 32
 #define DATABUF_SIZE 16384
 
@@ -69,7 +70,7 @@
 
 #define rpath_extend(dest, n, base, child)                                                         \
 	if (path_extend(dest, n, base, child) < 0) {                                                   \
-		replyf(client->socket, "500 Internal error: Path is too long!");                           \
+		rreply(client->socket, "500 Internal error: Path is too long!");                           \
 		return -1;                                                                                 \
 	}
 
@@ -263,7 +264,6 @@ static int handle_data(char *buf, Client *client) {
 
 static int cwd(Client *client, const char *path) {
 	static char pathbuf[8192];
-	const char *newpath;
 	const char *pwd = client->cwd;
 
 	// Handle .. and .
@@ -291,19 +291,23 @@ static int cwd(Client *client, const char *path) {
 		if (len > 1 && pathbuf[len - 1] == '/')
 			len--;
 		pathbuf[len] = '\0';
-		newpath = pathbuf;
 	} else if (path[0] == '/') {
 		// Go to specified absoule path
-		newpath = path;
+		strncpy(pathbuf, path, PATH_MAX);
+
+		// remove trailing slash if any
+		const int len = strlen(pathbuf);
+		if (len > 1 && pathbuf[len - 1] == '/')
+			pathbuf[len-1] = '\0';
 	} else {
 		// Go to specified relative path
 		rpath_extend(pathbuf, sizeof(pathbuf), client->cwd, path);
-		newpath = pathbuf;
 	}
+	printf("newpath: \"%s\"\n", pathbuf);
 
 	// Make sure the folder exists
 	struct stat dest_stat;
-	if (stat(newpath, &dest_stat) == -1) {
+	if (stat(pathbuf, &dest_stat) == -1) {
 		replyf(client->socket, "431 Error changing directory: %s\r\n", strerror(errno));
 		return -1;
 	}
@@ -312,7 +316,7 @@ static int cwd(Client *client, const char *path) {
 		return -1;
 	}
 
-	strncpy(client->cwd, newpath, PATH_MAX);
+	strncpy(client->cwd, pathbuf, PATH_MAX);
 	rreply_client("200 Working directory changed.\r\n");
 	return 0;
 }
