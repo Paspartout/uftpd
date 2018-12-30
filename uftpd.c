@@ -34,7 +34,7 @@
 
 // Helper macros for less typing
 
-#define STRLEN(s) ((sizeof(s) / sizeof(s[0]))-1)
+#define STRLEN(s) ((sizeof(s) / sizeof(s[0])) - 1)
 #define UNUSED(x) (void)(x)
 
 #ifdef DEBUG
@@ -298,7 +298,7 @@ static int cwd(Client *client, const char *path) {
 		// remove trailing slash if any
 		const int len = strlen(pathbuf);
 		if (len > 1 && pathbuf[len - 1] == '/')
-			pathbuf[len-1] = '\0';
+			pathbuf[len - 1] = '\0';
 	} else {
 		// Go to specified relative path
 		rpath_extend(pathbuf, sizeof(pathbuf), client->cwd, path);
@@ -599,7 +599,7 @@ static int handle_ftpcmd_logged_in(const FtpCmd *cmd, Client *client) {
 		if (type == 'I') {
 			client->ttype = Image;
 			rreplyf(client_sock, "200 Type set to %c.\r\n", type);
-		} else if (type == 'A'){
+		} else if (type == 'A') {
 			rreplyf(client_sock, "200 Type set to %c.\r\n", type);
 		} else {
 			rreplyf(client_sock, "500 Type %c not supported.\r\n", type);
